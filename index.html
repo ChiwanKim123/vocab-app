@@ -105,6 +105,7 @@ textarea.paste{min-height:180px;font-family:var(--f-mono);font-size:15px}
 .done b{font-family:var(--f-display);font-size:30px}
 .edit{display:grid;gap:8px;margin-top:6px}
 .more{display:grid;gap:8px;font-size:14px;border-top:1px dashed var(--line);padding-top:10px;margin-top:4px}
+.gcheck{display:grid;gap:4px;padding-bottom:8px;border-bottom:1px dashed var(--line)}
 .more h4{margin:0;font-size:12px;letter-spacing:.04em;color:var(--muted);font-weight:600}
 .more ul{margin:2px 0 0;padding-left:18px;display:grid;gap:4px}
 .more .sx{font-family:var(--f-display);color:var(--muted)}
@@ -541,6 +542,61 @@ function typeBox(body, ph, onDone){
 }
 const lock = f => f.querySelectorAll("input,textarea,button").forEach(x => x.disabled = true);
 
+// ---------- sentence feedback ----------
+// keep the learner's own sentences on the word so they can be reviewed later
+function saveMine(w, text){
+  w.mine = [...(w.mine || []).filter(m => m.s !== text), { s: text, d: Date.now() }].slice(-5);
+  save();
+}
+function claudePrompt(w, text){
+  return `CELPIP 준비 중이에요. '${w.word}'(${w.meaning || ""})를 넣어서 영어 문장을 썼어요.\n` +
+    `1) 문법이나 어색한 부분을 고쳐 주세요.\n2) 원어민이 쓰는 더 자연스러운 문장으로 바꿔 주세요.\n` +
+    `3) CELPIP Writing/Speaking에서 점수를 더 받을 수 있게 이유나 상황을 붙여 길게 쓴 버전도 하나 보여 주세요.\n` +
+    `설명은 한국어로 짧게 해 주세요.\n\n내 문장: ${text}`;
+}
+function askClaude(w, text, btn){
+  const q = claudePrompt(w, text);
+  // copy first so it can be pasted if the app opens without the text filled in
+  try { navigator.clipboard?.writeText(q).catch(() => {}); } catch {}
+  btn.textContent = "복사됨, Claude 여는 중…";
+  setTimeout(() => btn.textContent = "Claude에게 첨삭 받기", 2500);
+  window.open("https://claude.ai/new?q=" + encodeURIComponent(q), "_blank");
+}
+// free instant grammar/spelling check (LanguageTool); natural-sounding feedback comes from Claude
+async function grammarCheck(text, box){
+  box.innerHTML = `<p class="muted">문법·철자 검사 중…</p>`;
+  try {
+    const ctl = new AbortController(); setTimeout(() => ctl.abort(), 8000);
+    const r = await fetch("https://api.languagetool.org/v2/check", {
+      method: "POST", signal: ctl.signal,
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ text, language: "en-CA" })
+    });
+    if (!r.ok) throw 0;
+    const { matches = [] } = await r.json();
+    box.textContent = "";
+    const h = document.createElement("div"); h.className = "verdict";
+    if (!matches.length) { h.textContent = "문법·철자 문제 없음"; h.style.color = "var(--good)"; box.append(h); return; }
+    h.textContent = `고칠 곳 ${matches.length}개`; h.style.color = "var(--bad)"; box.append(h);
+    const ul = document.createElement("ul"); ul.style.cssText = "margin:4px 0 0;padding-left:18px;font-size:14px";
+    let fixed = text;
+    for (const m of [...matches].reverse()) {
+      const bad = text.substr(m.offset, m.length), sug = m.replacements?.[0]?.value;
+      if (sug != null) fixed = fixed.slice(0, m.offset) + sug + fixed.slice(m.offset + m.length);
+    }
+    for (const m of matches) {
+      const li = document.createElement("li");
+      const bad = text.substr(m.offset, m.length), sug = m.replacements?.[0]?.value;
+      li.textContent = (sug != null ? `${bad} → ${sug}` : bad) + `  (${m.message})`;
+      ul.append(li);
+    }
+    box.append(ul);
+    if (fixed !== text) { const f = document.createElement("div"); f.className = "mine"; f.textContent = fixed; box.append(f); }
+  } catch {
+    box.innerHTML = `<p class="muted">지금은 자동 문법 검사를 못 했어요. 'Claude에게 첨삭 받기'를 눌러 주세요.</p>`;
+  }
+}
+
 // self-graded questions: show the model answer, then the learner decides
 function selfCheck(w, mine, toEnglish){
   const fb = document.createElement("div"); fb.className = "feedback";
@@ -554,9 +610,12 @@ function selfCheck(w, mine, toEnglish){
   const no = document.createElement("button"); no.className = "btn ghost"; no.textContent = mine != null ? "다시 볼게요" : sent ? "어려웠어요" : "몰랐어요";
   row.append(yes, no);
   if (mine && !toEnglish) {
-    const cp = document.createElement("button"); cp.className = "btn ghost small"; cp.textContent = "Claude 첨삭용 복사";
-    cp.onclick = () => copy(`CELPIP 공부 중이에요. '${w.word}'(${w.meaning || ""})를 넣어서 쓴 문장인데 첨삭해 주세요:\n${mine}`, cp);
+    saveMine(w, mine);
+    const cp = document.createElement("button"); cp.className = "btn ghost small"; cp.textContent = "Claude에게 첨삭 받기";
+    cp.onclick = () => askClaude(w, mine, cp);
     row.append(cp);
+    const gc = document.createElement("div"); gc.className = "gcheck"; fb.querySelector(".ans").before(gc);
+    grammarCheck(mine, gc);
   }
   yes.onclick = () => { fb.remove(); feedback(w, true, "self", mine); };
   no.onclick = () => { fb.remove(); feedback(w, false, "self", mine); };
@@ -573,7 +632,7 @@ function fillAnswer(fb, w){
 }
 // extra study notes: other senses, collocations, paraphrases, look-alikes, usage
 function moreEl(w){
-  if (!(w.senses?.length || w.colloc?.length || w.syn?.length || w.confuse || w.note || w.use)) return null;
+  if (!(w.senses?.length || w.colloc?.length || w.syn?.length || w.confuse || w.note || w.use || w.mine?.length)) return null;
   const box = document.createElement("div"); box.className = "more";
   const sec = (title, node) => { const d = document.createElement("div"); const h = document.createElement("h4"); h.textContent = title; d.append(h, node); box.append(d); };
   const pills = arr => { const d = document.createElement("div"); d.className = "pills"; for (const x of arr) { const p = document.createElement("span"); p.className = "pill"; p.textContent = x; d.append(p); } return d; };
@@ -592,6 +651,15 @@ function moreEl(w){
   if (w.confuse) { const d = document.createElement("div"); d.textContent = w.confuse; sec("헷갈리는 단어", d); }
   if (w.note) { const d = document.createElement("div"); d.textContent = w.note; sec("쓰는 법", d); }
   if (w.use) { const d = document.createElement("div"); d.textContent = w.use; sec("CELPIP 활용", d); }
+  if (w.mine?.length) {
+    const ul = document.createElement("ul");
+    for (const m of w.mine) {
+      const li = document.createElement("li"); li.className = "sx"; li.textContent = m.s + " ";
+      const b = document.createElement("button"); b.className = "btn ghost small"; b.textContent = "첨삭"; b.style.marginLeft = "4px";
+      b.onclick = () => askClaude(w, m.s, b); li.append(b); ul.append(li);
+    }
+    sec("내가 쓴 문장", ul);
+  }
   return box;
 }
 let keyChoice = null;
