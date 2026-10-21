@@ -1006,12 +1006,18 @@ function renderTalk(){
   if (!rows.length) { list.innerHTML = `<p class="muted">${saved.length ? "찾는 표현이 없어요." : "마음에 드는 표현을 ‘저장’하면 여기에 모여요."}</p>`; return; }
   for (const t of rows) {
     const el = document.createElement("div"); el.className = "item";
-    el.innerHTML = `<div class="m" style="grid-column:1/-1;color:var(--ink)"></div><div class="w" style="grid-column:1/-1"></div><div class="e" style="grid-column:1/-1"></div><div class="acts"><button class="btn ghost small">지우기</button></div>`;
+    el.innerHTML = `<div class="m" style="grid-column:1/-1;color:var(--ink)"></div><div class="w" style="grid-column:1/-1"></div><div class="e" hidden style="grid-column:1/-1"></div><div class="acts" hidden><button class="btn ghost small">지우기</button></div>`;
+    el.style.cursor = "pointer";
     el.querySelector(".m").textContent = t.ko;
-    const w = el.querySelector(".w");
-    if (talkHide) { w.textContent = "눌러서 영어 보기"; w.style.color = "var(--muted)"; w.style.cursor = "pointer"; w.onclick = () => { w.textContent = t.en; w.style.color = ""; e.hidden = false; }; }
-    else w.textContent = t.en;
-    const e = el.querySelector(".e"); e.hidden = talkHide;
+    const w = el.querySelector(".w"), e = el.querySelector(".e"), acts = el.querySelector(".acts");
+    let shown = !talkHide;
+    if (shown) w.textContent = t.en; else { w.textContent = "눌러서 영어 보기"; w.style.color = "var(--muted)"; }
+    // collapsed by default: Korean + English; tap to reveal English (if hidden), then to toggle the notes
+    el.onclick = ev => {
+      if (ev.target.closest("button")) return;
+      if (!shown) { shown = true; w.textContent = t.en; w.style.color = ""; return; }
+      e.hidden = acts.hidden = !e.hidden;
+    };
     e.textContent = [t.note, ...(t.words || []).map(x => `${x.en} = ${x.ko}`)].filter(Boolean).join("  ·  ");
     el.querySelector("button").onclick = () => { if (!confirm("이 표현을 지울까요?")) return; state.daily = state.daily.filter(x => x.id !== t.id); save(); renderTalk(); };
     list.append(el);
