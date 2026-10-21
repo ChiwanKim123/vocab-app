@@ -141,8 +141,9 @@ ol.steps{margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px}
         <button class="chipbtn" data-v="chunks" aria-pressed="false">덩어리 표현·문장</button>
         <button class="chipbtn" data-v="writing" aria-pressed="false">라이팅 표현</button>
         <button class="chipbtn" data-v="weak" aria-pressed="false">자주 틀린 것만</button>
+        <button class="chipbtn" data-v="practice" aria-pressed="false">✍️ 첨삭 연습</button>
       </div>
-      <div class="label">문제 유형</div>
+      <div class="label" id="typesLabel">문제 유형</div>
       <div class="chips" id="types">
         <button class="chipbtn" data-v="choice" aria-pressed="true">뜻 고르기</button>
         <button class="chipbtn" data-v="cloze" aria-pressed="true">예문 빈칸</button>
@@ -303,7 +304,8 @@ let scope = "all", sortBy = "abc";
 let types = new Set(["choice", "cloze", "ko2en", "syn", "write"]);
 // a "chunk" is any multi-word phrase or sentence (take ownership of, Our hearts go out to ...)
 const isChunk = w => w.kind === "sentence" || /\s/.test(w.word.trim());
-const inScope = w => scope === "writing" ? isWriting(w) : scope === "weak" ? isWeak(w)
+const PRACTICE_Q = 10;
+const inScope = w => scope === "practice" ? w.kind !== "sentence" : scope === "writing" ? isWriting(w) : scope === "weak" ? isWeak(w)
   : isWriting(w) ? false : scope === "words" ? !isChunk(w) : scope === "chunks" ? isChunk(w) : true;
 function chipGroup(id, multi, onPick){
   $(id).onclick = e => {
@@ -343,6 +345,15 @@ function render(){
   $("sWeak").textContent = ws.filter(isWeak).length;
   $("sMaster").textContent = ws.filter(w => (w.box || 0) >= 5).length;
   const due = ws.filter(w => isDue(w) && inScope(w)).length;
+  const practice = scope === "practice";
+  $("types").hidden = $("typesLabel").hidden = $("startExtra").hidden = practice;
+  if (practice) {
+    $("startDue").disabled = !ws.some(inScope);
+    $("startDue").textContent = `첨삭 연습 시작 (${PRACTICE_Q}문장)`;
+    $("setupNote").textContent = "내 단어로 문장 쓰기만 나와요. " + (apiKey() ? "다 쓰면 Claude가 바로 첨삭하고 단어장 → 첨삭 노트에 모아 둬요." : "설정에서 Claude 키를 넣으면 앱 안에서 바로 첨삭돼요.") + " 복습 일정에는 영향이 없어요.";
+    $("streak").innerHTML = state.streak.count ? `연속 <b>${state.streak.count}</b>일` : "";
+    return;
+  }
   $("startDue").disabled = !due;
   $("startExtra").disabled = !ws.some(inScope);
   $("startDue").textContent = due ? `오늘 복습 시작 (${Math.min(due, MAX_Q)}문제)` : "오늘 복습 끝!";
@@ -438,7 +449,9 @@ const shuffle = a => { a = [...a]; for (let i = a.length - 1; i > 0; i--) { cons
 const norm = s => (s || "").toLowerCase().replace(/[’']/g, "'").replace(/[~…]/g, " ").replace(/[^a-z' -]/g, "").replace(/\s+/g, " ").trim();
 function canCloze(w){ return w.kind !== "sentence" && w.example && w.form && w.example.toLowerCase().includes(w.form.toLowerCase()); }
 const letterHint = s => s.split(/\s+/).map(t => t.length < 2 ? t : t[0] + "_".repeat(t.length - 1)).join("  ");
+const SITUATIONS = ["이웃에게 불편을 이야기하는 이메일", "회사 상사에게 보내는 이메일", "동네 시설에 대한 설문 답변(찬성/반대)", "친구에게 조언하는 말", "고객센터에 불만을 말하는 이메일", "시청에 의견을 내는 설문 답변", "직장 동료에게 부탁하는 말", "두 가지 중 하나를 고르고 이유를 말하는 상황"];
 function pickType(w, avoid){
+  if (S?.practice) return "write";
   if (w.kind === "sentence") return w.meaning && types.has("ko2en") && avoid !== "ko2en" && Math.random() < .5 ? "ko2en" : "translate";
   const opts = [];
   if (types.has("ko2en") && w.meaning && isChunk(w)) opts.push("ko2en");
@@ -457,10 +470,16 @@ let S = null; // session
 function start(pool, graded){
   pool = shuffle(pool).slice(0, MAX_Q);
   if (!pool.length) return;
-  S = { graded, round: 1, queue: pool.map(w => ({ id: w.id })), i: 0, wrong: [], firstRight: 0, firstTotal: pool.length, lastType: {} };
+  S = { graded, practice: scope === "practice", round: 1, queue: pool.map(w => ({ id: w.id })), i: 0, wrong: [], firstRight: 0, firstTotal: pool.length, lastType: {} };
   $("setup").hidden = true; document.querySelector(".stats").hidden = true; $("quiz").hidden = false; ask();
 }
-$("startDue").onclick = () => start(all().filter(w => isDue(w) && inScope(w)), true);
+$("startDue").onclick = () => {
+  if (scope !== "practice") return start(all().filter(w => isDue(w) && inScope(w)), true);
+  // words written about least recently come first, so practice spreads over the whole list
+  const last = w => Math.max(0, ...(w.mine || []).map(m => m.d));
+  const pool = shuffle(all().filter(inScope)).sort((a, b) => last(a) - last(b));
+  start(pool.slice(0, PRACTICE_Q), false);
+};
 $("startExtra").onclick = () => {
   // weakest and least-recently-seen first, then random
   const pool = all().filter(inScope).sort((a, b) => ((b.wrongCount || 0) - (b.right || 0)) - ((a.wrongCount || 0) - (a.right || 0)) || (a.lastSeen || 0) - (b.lastSeen || 0));
@@ -549,7 +568,8 @@ function ask(){
   } else if (type === "write") {
     body.innerHTML = `<div class="prompt"></div><p class="hint"></p>`;
     body.querySelector(".prompt").textContent = w.word;
-    body.querySelector(".hint").textContent = (w.meaning ? "뜻: " + w.meaning + "  ·  " : "") + "이 표현을 넣어 CELPIP 상황(이메일, 이웃, 직장, 설문 답변) 문장을 하나 써 보세요.";
+    const sit = S.practice ? SITUATIONS[Math.floor(Math.random() * SITUATIONS.length)] : "CELPIP 상황(이메일, 이웃, 직장, 설문 답변)";
+    body.querySelector(".hint").textContent = (w.meaning ? "뜻: " + w.meaning + "  ·  " : "") + `이 표현을 넣어 ${sit} 문장을 하나 써 보세요.`;
     const f = document.createElement("form"); f.style.cssText = "display:grid;gap:8px";
     f.innerHTML = `<textarea id="ans" placeholder="영어 문장을 써 보세요" autocapitalize="sentences"></textarea><div class="row"><button class="btn wide">다 썼어요</button><button type="button" class="btn ghost" id="idk">잘 모르겠어요</button></div>`;
     body.append(f);
@@ -797,6 +817,7 @@ function feedback(w, ok, type, given){
 }
 function endRound(){
   const wrong = S.wrong.length;
+  if (S.practice) return finish(false, wrong);
   const quiz = $("quiz");
   if (wrong >= PASS_WRONG) {
     quiz.innerHTML = `<div class="done"><span class="label">${S.round}회차 결과</span><b>${S.queue.length - wrong} / ${S.queue.length}</b><p class="muted">틀린 게 ${wrong}개라 틀린 문제만 섞어서 한 번 더 풀어요. 5개 미만이 되면 끝나요.</p><button class="btn" id="again">다시 풀기</button></div>`;
@@ -808,6 +829,12 @@ function finish(quit, lastWrong){
   if (S.graded && S.i > 0) bumpStreak();
   save();
   const q = $("quiz");
+  if (S.practice) {
+    q.innerHTML = `<div class="done"><span class="label">첨삭 연습</span><b>${S.i}문장</b><p class="muted">쓴 문장과 첨삭은 단어장 → 첨삭 노트에 모여 있어요.</p><div class="row" style="justify-content:center"><button class="btn" id="more10">10문장 더</button><button class="btn ghost" id="back">돌아가기</button></div></div>`;
+    $("more10").onclick = () => { S = null; $("startDue").click(); };
+    $("back").onclick = () => { q.hidden = true; $("setup").hidden = false; document.querySelector(".stats").hidden = false; };
+    S = null; keyChoice = null; render(); return;
+  }
   const msg = quit ? "푼 문제까지 저장했어요." : S.round > 1 ? `${S.round}회차 만에 틀린 게 ${lastWrong}개 이하로 줄었어요. 오늘 복습 끝!` : "한 번에 통과했어요. 오늘 복습 끝!";
   q.innerHTML = `<div class="done"><span class="label">${S.graded ? "오늘 복습" : "추가 연습"}</span><b>${S.firstRight} / ${S.firstTotal}</b><p class="muted">첫 회차에 맞힌 개수예요. ${msg}</p><button class="btn" id="back">돌아가기</button></div>`;
   $("back").onclick = () => { q.hidden = true; $("setup").hidden = false; document.querySelector(".stats").hidden = false; };
