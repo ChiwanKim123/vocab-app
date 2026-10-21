@@ -168,6 +168,7 @@ ol.steps{margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px}
       <button class="chipbtn" data-v="abc" aria-pressed="true">ABC순</button>
       <button class="chipbtn" data-v="new" aria-pressed="false">최근 추가</button>
       <button class="chipbtn" data-v="wrong" aria-pressed="false">많이 틀린 순</button>
+      <button class="chipbtn" data-v="notes" aria-pressed="false">첨삭 노트</button>
     </div>
     <div class="panel"><div class="list" id="list"></div></div>
   </section>
@@ -351,6 +352,7 @@ function render(){
   $("streak").innerHTML = state.streak.count ? `연속 <b>${state.streak.count}</b>일` : "";
 }
 function renderList(){
+  if (sortBy === "notes") return renderNotes();
   const q = $("search").value.trim().toLowerCase();
   let rows = all().filter(w => !q || (w.word + " " + (w.meaning || "") + " " + (w.example || "")).toLowerCase().includes(q));
   rows.sort(sortBy === "new" ? (a, b) => (b.addedAt || 0) - (a.addedAt || 0)
@@ -361,6 +363,25 @@ function renderList(){
   const frag = document.createDocumentFragment();
   for (const w of rows.slice(0, 400)) frag.append(itemEl(w));
   list.append(frag);
+}
+// every sentence Claude corrected, newest first, so it can be reviewed later
+function renderNotes(){
+  const q = $("search").value.trim().toLowerCase();
+  const notes = [];
+  for (const w of all()) for (const m of w.mine || []) if (m.fb) notes.push({ w, m });
+  const rows = notes.filter(({ w, m }) => !q || (w.word + " " + m.s + " " + m.fb).toLowerCase().includes(q)).sort((a, b) => b.m.d - a.m.d);
+  const list = $("list"); list.textContent = "";
+  if (!rows.length) { list.innerHTML = `<p class="muted">${notes.length ? "찾는 첨삭이 없어요." : "아직 저장된 첨삭이 없어요. 문장 만들기에서 Claude 첨삭을 받으면 여기에 자동으로 모여요."}</p>`; return; }
+  for (const { w, m } of rows) {
+    const el = document.createElement("div"); el.className = "item";
+    el.innerHTML = `<div class="w"></div><div class="box"></div><div class="m"></div><div class="mine" style="grid-column:1/-1;white-space:pre-wrap"></div><div class="acts"><button class="btn ghost small" data-a="del">이 첨삭 지우기</button></div>`;
+    el.querySelector(".w").textContent = w.word;
+    el.querySelector(".box").textContent = new Date(m.d).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+    el.querySelector(".m").textContent = "내 문장: " + m.s;
+    el.querySelector(".mine").textContent = m.fb;
+    el.querySelector("[data-a=del]").onclick = () => { if (!confirm("이 첨삭을 지울까요?")) return; delete m.fb; save(); el.remove(); };
+    list.append(el);
+  }
 }
 function itemEl(w){
   const el = document.createElement("div"); el.className = "item";
@@ -556,7 +577,8 @@ const lock = f => f.querySelectorAll("input,textarea,button").forEach(x => x.dis
 // ---------- sentence feedback ----------
 // keep the learner's own sentences on the word so they can be reviewed later
 function saveMine(w, text){
-  w.mine = [...(w.mine || []).filter(m => m.s !== text), { s: text, d: Date.now() }].slice(-5);
+  const old = (w.mine || []).find(m => m.s === text);
+  w.mine = [...(w.mine || []).filter(m => m.s !== text), { ...old, s: text, d: Date.now() }].slice(-10);
   save();
 }
 function claudePrompt(w, text){
@@ -613,7 +635,10 @@ async function aiCheck(w, text, box){
     const out = await callClaude(prompt);
     box.textContent = "";
     const d = document.createElement("div"); d.className = "mine"; d.style.whiteSpace = "pre-wrap"; d.textContent = out;
-    box.append(d);
+    const n = document.createElement("p"); n.className = "muted"; n.textContent = "단어장 → 첨삭 노트에 저장했어요.";
+    box.append(d, n);
+    saveMine(w, text);
+    w.mine.find(m => m.s === text).fb = out; save();
   } catch (e) {
     box.innerHTML = "";
     const p = document.createElement("p"); p.className = "muted"; p.textContent = e.message + " 대신 기본 문법 검사를 할게요.";
@@ -721,6 +746,7 @@ function moreEl(w){
     const ul = document.createElement("ul");
     for (const m of w.mine) {
       const li = document.createElement("li"); li.className = "sx"; li.textContent = m.s + " ";
+      if (m.fb) { const f = document.createElement("div"); f.className = "mine"; f.style.whiteSpace = "pre-wrap"; f.textContent = m.fb; li.append(f); ul.append(li); continue; }
       const b = document.createElement("button"); b.className = "btn ghost small"; b.textContent = "첨삭"; b.style.marginLeft = "4px";
       b.onclick = () => {
         if (!apiKey()) return askClaude(w, m.s, b);
