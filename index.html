@@ -571,13 +571,18 @@ async function grammarCheck(text, box){
     const r = await fetch("https://api.languagetool.org/v2/check", {
       method: "POST", signal: ctl.signal,
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ text, language: "en-CA" })
+      body: new URLSearchParams({ text, language: "en-CA", level: "picky" })
     });
     if (!r.ok) throw 0;
     const { matches = [] } = await r.json();
     box.textContent = "";
     const h = document.createElement("div"); h.className = "verdict";
-    if (!matches.length) { h.textContent = "문법·철자 문제 없음"; h.style.color = "var(--good)"; box.append(h); return; }
+    if (!matches.length) {
+      h.textContent = "철자·기본 문법에서는 걸리는 게 없어요"; h.style.color = "var(--good)"; box.append(h);
+      const n = document.createElement("p"); n.className = "muted";
+      n.textContent = "이 검사는 빠진 단어나 어색한 표현은 잘 못 잡아요. 자연스러운지는 'Claude에게 첨삭 받기'로 확인하세요.";
+      box.append(n); return;
+    }
     h.textContent = `고칠 곳 ${matches.length}개`; h.style.color = "var(--bad)"; box.append(h);
     const ul = document.createElement("ul"); ul.style.cssText = "margin:4px 0 0;padding-left:18px;font-size:14px";
     let fixed = text;
