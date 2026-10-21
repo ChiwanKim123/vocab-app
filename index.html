@@ -406,9 +406,18 @@ function renderNotes(){
   if (!rows.length) { list.innerHTML = `<p class="muted">${notes.length ? "찾는 첨삭이 없어요." : "아직 저장된 첨삭이 없어요. 첨삭 밑의 ‘📌 첨삭 노트에 저장’을 누르면 여기에 모여요."}</p>`; return; }
   for (const { w, m } of rows) {
     const el = document.createElement("div"); el.className = "item";
-    el.innerHTML = `<div class="w"></div><div class="box"></div><div class="m"></div><div class="mine" style="grid-column:1/-1;white-space:pre-wrap"></div><div class="acts"><button class="btn ghost small" data-a="del">이 첨삭 지우기</button></div>`;
+    el.innerHTML = `<div class="w"></div><div class="box"></div><div class="m" style="grid-column:1/-1;cursor:pointer"></div><div class="mine" hidden style="grid-column:1/-1;white-space:pre-wrap"></div><div class="acts" hidden><button class="btn ghost small" data-a="del">이 첨삭 지우기</button></div>`;
+    el.style.cursor = "pointer";
+    // collapsed by default: word + my sentence; tap to see the correction
+    el.onclick = e => {
+      if (e.target.closest("button")) return;
+      const open = el.querySelector(".mine").hidden;
+      el.querySelector(".mine").hidden = el.querySelector(".acts").hidden = !open;
+      el.querySelector(".box").textContent = date + (open ? "  ▲" : "  ▼");
+    };
     el.querySelector(".w").textContent = w.word;
-    el.querySelector(".box").textContent = new Date(m.d).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+    const date = new Date(m.d).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+    el.querySelector(".box").textContent = date + "  ▼";
     el.querySelector(".m").textContent = "내 문장: " + m.s;
     el.querySelector(".mine").textContent = m.fb;
     el.querySelector("[data-a=del]").onclick = () => { if (!confirm("이 첨삭을 지울까요?")) return; delete m.fb; save(); el.remove(); };
