@@ -204,6 +204,16 @@ ol.steps{margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px}
       <p class="muted" id="backupMsg"></p>
     </div>
     <div class="panel">
+      <div class="label">Claude 바로 첨삭 (선택)</div>
+      <p class="muted">API 키를 넣으면 ‘문장 만들기’에서 Claude가 앱 안에서 바로 고쳐 줘요. 키는 이 폰에만 저장되고 백업 파일에도 들어가지 않아요.</p>
+      <input id="apiKey" type="password" autocomplete="off" placeholder="sk-ant-로 시작하는 키 붙여넣기" style="width:100%">
+      <div class="row" style="margin-top:8px">
+        <button class="btn small" id="keySave">저장하고 시험해 보기</button>
+        <button class="btn ghost small" id="keyDel">키 지우기</button>
+      </div>
+      <p class="muted" id="keyMsg"></p>
+    </div>
+    <div class="panel">
       <div class="label">아이폰 홈 화면에 설치</div>
       <ol class="steps">
         <li>사파리에서 이 주소를 열어요.</li>
@@ -563,6 +573,53 @@ function askClaude(w, text, btn){
   setTimeout(() => btn.textContent = "Claude에게 첨삭 받기", 2500);
   window.open("https://claude.ai/new?q=" + encodeURIComponent(q), "_blank");
 }
+// in-app Claude feedback with the learner's own API key (kept only on this phone, outside the backup)
+const KEY_API = "celpip-claude-key";
+function apiKey(){ try { return localStorage.getItem(KEY_API) || ""; } catch { return ""; } }
+async function callClaude(prompt){
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      "x-api-key": apiKey(),
+      "anthropic-version": "2023-06-01",
+      "anthropic-dangerous-direct-browser-access": "true"
+    },
+    body: JSON.stringify({
+      model: "claude-haiku-5-5", max_tokens: 700,
+      system: "You are a friendly English tutor for a Korean learner preparing for CELPIP. Reply in Korean, short and clear. Keep English sentences in English. Plain text only, no markdown symbols like ** or #.",
+      messages: [{ role: "user", content: prompt }]
+    })
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    const m = j.error?.message || "";
+    throw new Error(r.status === 401 ? "키가 맞지 않아요. 설정에서 키를 다시 넣어 주세요."
+      : /credit/i.test(m) ? "크레딧이 부족해요. console.anthropic.com에서 충전해 주세요."
+      : r.status === 429 ? "잠깐 너무 많이 보냈어요. 조금 뒤에 다시 눌러 주세요."
+      : "Claude 연결이 안 됐어요. (" + (m || r.status) + ")");
+  }
+  return (j.content || []).filter(c => c.type === "text").map(c => c.text).join("\n").trim();
+}
+async function aiCheck(w, text, box){
+  box.innerHTML = `<p class="muted">Claude가 첨삭하는 중…</p>`;
+  const prompt = `단어: ${w.word} (${w.meaning || ""})\n학생 문장: ${text}\n\n아래 순서로 답해 주세요.\n` +
+    `판정: 자연스러우면 "✅ 잘 썼어요", 고칠 게 있으면 "✏️ 고칠 곳이 있어요"\n` +
+    `고친 문장: (문법·빠진 단어·단어 뜻에 맞게 고친 문장, 고칠 게 없으면 그대로)\n` +
+    `이유: (무엇을 왜 고쳤는지 한국어로 1~2줄)\n` +
+    `더 자연스럽게: (원어민이 실제로 쓸 문장 하나)\n` +
+    `CELPIP용: (이유나 상황을 붙여 Writing/Speaking에서 쓸 수 있게 늘린 문장 하나)`;
+  try {
+    const out = await callClaude(prompt);
+    box.textContent = "";
+    const d = document.createElement("div"); d.className = "mine"; d.style.whiteSpace = "pre-wrap"; d.textContent = out;
+    box.append(d);
+  } catch (e) {
+    box.innerHTML = "";
+    const p = document.createElement("p"); p.className = "muted"; p.textContent = e.message + " 대신 기본 문법 검사를 할게요.";
+    const g = document.createElement("div"); box.append(p, g); grammarCheck(text, g);
+  }
+}
 // free instant grammar/spelling check (LanguageTool); natural-sounding feedback comes from Claude
 async function grammarCheck(text, box){
   box.innerHTML = `<p class="muted">문법·철자 검사 중…</p>`;
@@ -617,11 +674,14 @@ function selfCheck(w, mine, toEnglish){
   row.append(yes, no);
   if (mine && !toEnglish) {
     saveMine(w, mine);
-    const cp = document.createElement("button"); cp.className = "btn ghost small"; cp.textContent = "Claude에게 첨삭 받기";
-    cp.onclick = () => askClaude(w, mine, cp);
-    row.append(cp);
     const gc = document.createElement("div"); gc.className = "gcheck"; fb.querySelector(".ans").before(gc);
-    grammarCheck(mine, gc);
+    if (apiKey()) aiCheck(w, mine, gc);
+    else {
+      const cp = document.createElement("button"); cp.className = "btn ghost small"; cp.textContent = "Claude에게 첨삭 받기";
+      cp.onclick = () => askClaude(w, mine, cp);
+      row.append(cp);
+      grammarCheck(mine, gc);
+    }
   }
   yes.onclick = () => { fb.remove(); feedback(w, true, "self", mine); };
   no.onclick = () => { fb.remove(); feedback(w, false, "self", mine); };
@@ -662,7 +722,11 @@ function moreEl(w){
     for (const m of w.mine) {
       const li = document.createElement("li"); li.className = "sx"; li.textContent = m.s + " ";
       const b = document.createElement("button"); b.className = "btn ghost small"; b.textContent = "첨삭"; b.style.marginLeft = "4px";
-      b.onclick = () => askClaude(w, m.s, b); li.append(b); ul.append(li);
+      b.onclick = () => {
+        if (!apiKey()) return askClaude(w, m.s, b);
+        b.remove(); const out = document.createElement("div"); li.append(out); aiCheck(w, m.s, out);
+      };
+      li.append(b); ul.append(li);
     }
     sec("내가 쓴 문장", ul);
   }
@@ -804,6 +868,16 @@ function copy(text, btn){
   if (navigator.clipboard) navigator.clipboard.writeText(text).then(done, () => prompt("복사해서 쓰세요", text));
   else prompt("복사해서 쓰세요", text);
 }
+$("apiKey").value = apiKey();
+$("keySave").onclick = async () => {
+  const k = $("apiKey").value.trim();
+  if (!k) { $("keyMsg").textContent = "키를 먼저 붙여 넣어 주세요."; return; }
+  try { localStorage.setItem(KEY_API, k); } catch {}
+  $("keyMsg").textContent = "시험해 보는 중…";
+  try { await callClaude("Say OK."); $("keyMsg").textContent = "✅ 연결됐어요. 이제 문장 만들기에서 Claude가 바로 첨삭해요."; }
+  catch (e) { $("keyMsg").textContent = "❌ " + e.message; }
+};
+$("keyDel").onclick = () => { try { localStorage.removeItem(KEY_API); } catch {} $("apiKey").value = ""; $("keyMsg").textContent = "키를 지웠어요."; };
 $("exportBtn").onclick = async () => {
   const name = `단어장-백업-${today()}.json`;
   const blob = new Blob([JSON.stringify({ app: "celpip-vocab", version: 1, ...state }, null, 1)], { type: "application/json" });
