@@ -371,7 +371,7 @@ function render(){
   if (practice) {
     $("startDue").disabled = !ws.some(inScope);
     $("startDue").textContent = `첨삭 연습 시작 (${PRACTICE_Q}문장)`;
-    $("setupNote").textContent = "내 단어로 문장 쓰기만 나와요. " + (apiKey() ? "다 쓰면 Claude가 바로 첨삭하고 단어장 → 첨삭 노트에 모아 둬요." : "설정에서 Claude 키를 넣으면 앱 안에서 바로 첨삭돼요.") + " 복습 일정에는 영향이 없어요.";
+    $("setupNote").textContent = "내 단어로 문장 쓰기만 나와요. " + (apiKey() ? "다 쓰면 Claude가 바로 첨삭하고, 마음에 드는 건 ‘첨삭 노트에 저장’으로 모아 둘 수 있어요." : "설정에서 Claude 키를 넣으면 앱 안에서 바로 첨삭돼요.") + " 복습 일정에는 영향이 없어요.";
     $("streak").innerHTML = state.streak.count ? `연속 <b>${state.streak.count}</b>일` : "";
     return;
   }
@@ -403,7 +403,7 @@ function renderNotes(){
   for (const w of all()) for (const m of w.mine || []) if (m.fb) notes.push({ w, m });
   const rows = notes.filter(({ w, m }) => !q || (w.word + " " + m.s + " " + m.fb).toLowerCase().includes(q)).sort((a, b) => b.m.d - a.m.d);
   const list = $("list"); list.textContent = "";
-  if (!rows.length) { list.innerHTML = `<p class="muted">${notes.length ? "찾는 첨삭이 없어요." : "아직 저장된 첨삭이 없어요. 문장 만들기에서 Claude 첨삭을 받으면 여기에 자동으로 모여요."}</p>`; return; }
+  if (!rows.length) { list.innerHTML = `<p class="muted">${notes.length ? "찾는 첨삭이 없어요." : "아직 저장된 첨삭이 없어요. 첨삭 밑의 ‘📌 첨삭 노트에 저장’을 누르면 여기에 모여요."}</p>`; return; }
   for (const { w, m } of rows) {
     const el = document.createElement("div"); el.className = "item";
     el.innerHTML = `<div class="w"></div><div class="box"></div><div class="m"></div><div class="mine" style="grid-column:1/-1;white-space:pre-wrap"></div><div class="acts"><button class="btn ghost small" data-a="del">이 첨삭 지우기</button></div>`;
@@ -676,10 +676,14 @@ async function aiCheck(w, text, box){
     const out = await callClaude(prompt);
     box.textContent = "";
     const d = document.createElement("div"); d.className = "mine"; d.style.whiteSpace = "pre-wrap"; d.textContent = out;
-    const n = document.createElement("p"); n.className = "muted"; n.textContent = "단어장 → 첨삭 노트에 저장했어요.";
-    box.append(d, n);
-    saveMine(w, text);
-    w.mine.find(m => m.s === text).fb = out; save();
+    // the learner picks which corrections are worth keeping
+    const keep = document.createElement("button"); keep.className = "btn small"; keep.style.marginTop = "8px"; keep.textContent = "📌 첨삭 노트에 저장";
+    keep.onclick = () => {
+      saveMine(w, text);
+      w.mine.find(m => m.s === text).fb = out; save();
+      keep.disabled = true; keep.textContent = "✓ 저장됨 (단어장 → 첨삭 노트)";
+    };
+    box.append(d, keep);
   } catch (e) {
     box.innerHTML = "";
     const p = document.createElement("p"); p.className = "muted"; p.textContent = e.message + " 대신 기본 문법 검사를 할게요.";
@@ -851,7 +855,7 @@ function finish(quit, lastWrong){
   save();
   const q = $("quiz");
   if (S.practice) {
-    q.innerHTML = `<div class="done"><span class="label">첨삭 연습</span><b>${S.i}문장</b><p class="muted">쓴 문장과 첨삭은 단어장 → 첨삭 노트에 모여 있어요.</p><div class="row" style="justify-content:center"><button class="btn" id="more10">10문장 더</button><button class="btn ghost" id="back">돌아가기</button></div></div>`;
+    q.innerHTML = `<div class="done"><span class="label">첨삭 연습</span><b>${S.i}문장</b><p class="muted">저장한 첨삭은 단어장 → 첨삭 노트에서 다시 볼 수 있어요.</p><div class="row" style="justify-content:center"><button class="btn" id="more10">10문장 더</button><button class="btn ghost" id="back">돌아가기</button></div></div>`;
     $("more10").onclick = () => { S = null; $("startDue").click(); };
     $("back").onclick = () => { q.hidden = true; $("setup").hidden = false; document.querySelector(".stats").hidden = false; };
     S = null; keyChoice = null; render(); return;
