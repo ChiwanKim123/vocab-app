@@ -1,5 +1,5 @@
 // Cache the app shell so it opens offline; bump VERSION when files change.
-const VERSION = "v5";
+const VERSION = "v6";
 const SHELL = ["./", "index.html", "words.js", "manifest.webmanifest", "icon-180.png", "icon-192.png", "icon-512.png"];
 self.addEventListener("install", e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

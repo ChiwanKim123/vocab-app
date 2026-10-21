@@ -468,12 +468,13 @@ function ask(){
     });
     keyChoice = n => box.children[n - 1]?.click();
   } else if (type === "cloze") {
-    body.innerHTML = `<div class="sentence"></div><p class="hint"></p>`;
+    body.innerHTML = `<div class="sentence"></div><p class="hint ko-line"></p><p class="hint"></p>`;
+    body.querySelector(".ko-line").textContent = w.exampleKo ? "해석: " + w.exampleKo : "";
     const i = w.example.toLowerCase().indexOf(w.form.toLowerCase());
     const mark = document.createElement("span"); mark.className = "blank";
     mark.textContent = w.form.includes(" ") ? letterHint(w.form) : w.form[0] + " _ _ _";
     body.querySelector(".sentence").append(w.example.slice(0, i), mark, w.example.slice(i + w.form.length));
-    body.querySelector(".hint").textContent = "뜻: " + (w.meaning || "—");
+    body.querySelector(".hint:not(.ko-line)").textContent = "뜻: " + (w.meaning || "—");
     typeBox(body, "빈칸에 들어갈 말", v => {
       const ok = norm(v) === norm(w.form) || norm(v) === norm(w.word);
       answer(ok, v);
