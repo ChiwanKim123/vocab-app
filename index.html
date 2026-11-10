@@ -648,7 +648,7 @@ function askClaude(w, text, btn){
 // in-app Claude feedback with the learner's own API key (kept only on this phone, outside the backup)
 const KEY_API = "celpip-claude-key";
 function apiKey(){ try { return localStorage.getItem(KEY_API) || ""; } catch { return ""; } }
-async function callClaude(prompt){
+async function callClaude(prompt, schema){
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
@@ -658,7 +658,10 @@ async function callClaude(prompt){
       "anthropic-dangerous-direct-browser-access": "true"
     },
     body: JSON.stringify({
-      model: "claude-haiku-5-5", max_tokens: 700,
+      // Haiku 5.5 thinks before answering and that thinking counts toward max_tokens,
+      // so leave plenty of room and keep the effort low for these short answers
+      model: "claude-haiku-5-5", max_tokens: 4000,
+      output_config: { effort: "low", ...(schema ? { format: { type: "json_schema", schema } } : {}) },
       system: "You are a friendly English tutor for a Korean learner preparing for CELPIP. Reply in Korean, short and clear. Keep English sentences in English. Plain text only, no markdown symbols like ** or #.",
       messages: [{ role: "user", content: prompt }]
     })
@@ -671,7 +674,9 @@ async function callClaude(prompt){
       : r.status === 429 ? "잠깐 너무 많이 보냈어요. 조금 뒤에 다시 눌러 주세요."
       : "Claude 연결이 안 됐어요. (" + (m || r.status) + ")");
   }
-  return (j.content || []).filter(c => c.type === "text").map(c => c.text).join("\n").trim();
+  const text = (j.content || []).filter(c => c.type === "text").map(c => c.text).join("\n").trim();
+  if (!text || j.stop_reason === "max_tokens") throw new Error("답이 중간에 끊겼어요. 한 번 더 눌러 주세요.");
+  return text;
 }
 async function aiCheck(w, text, box){
   box.innerHTML = `<p class="muted">Claude가 첨삭하는 중…</p>`;
@@ -957,6 +962,13 @@ function copy(text, btn){
 }
 // ---------- everyday English (kept apart from the CELPIP words) ----------
 let talkHide = false;
+const TALK_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["options", "words"],
+  properties: {
+    options: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "note"], properties: { en: { type: "string" }, note: { type: "string" } } } },
+    words: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "ko"], properties: { en: { type: "string" }, ko: { type: "string" } } } }
+  }
+};
 $("talkAsk").onclick = async () => {
   const q = $("talkQ").value.trim(); if (!q) return;
   const out = $("talkOut");
@@ -971,7 +983,7 @@ $("talkAsk").onclick = async () => {
       `이 말을 캐나다에서 원어민이 일상에서 실제로 하는 자연스러운 영어로 바꿔 주세요. 교과서 말투 말고 진짜 입으로 하는 말로요.\n` +
       `JSON만 출력하세요. 다른 글자는 쓰지 마세요.\n` +
       `{"options":[{"en":"영어 표현","note":"한국어로 1줄: 언제, 어떤 느낌으로 쓰는지"}],"words":[{"en":"핵심 단어나 덩어리","ko":"뜻"}]}\n` +
-      `options는 2~3개, 첫 번째가 가장 자연스러운 것. words는 기억해 둘 만한 핵심 표현 0~3개.`);
+      `options는 2~3개, 첫 번째가 가장 자연스러운 것. words는 기억해 둘 만한 핵심 표현 0~3개.`, TALK_SCHEMA);
     const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
     out.textContent = "";
     for (const o of j.options || []) {
