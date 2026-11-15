@@ -962,38 +962,50 @@ function copy(text, btn){
 }
 // ---------- everyday English (kept apart from the CELPIP words) ----------
 let talkHide = false;
+// three registers Chiwan asked for: phone calls to offices, polite strangers, everyday casual
+const TALK_LEVELS = [
+  { key: "formal", label: "📞 공적인 통화", who: "회사·거래처·관공서에 전화할 때" },
+  { key: "polite", label: "🙂 처음 보는 사람", who: "우버 기사·길에서 만난 사람·상점 주인·아파트 매니저에게" },
+  { key: "casual", label: "💬 일상", who: "친구·가족·편한 사이에서" }
+];
+const TALK_ITEM = { type: "object", additionalProperties: false, required: ["en", "note"], properties: { en: { type: "string" }, note: { type: "string" } } };
 const TALK_SCHEMA = {
-  type: "object", additionalProperties: false, required: ["options", "words"],
+  type: "object", additionalProperties: false, required: ["formal", "polite", "casual", "words"],
   properties: {
-    options: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "note"], properties: { en: { type: "string" }, note: { type: "string" } } } },
+    formal: TALK_ITEM, polite: TALK_ITEM, casual: TALK_ITEM,
     words: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "ko"], properties: { en: { type: "string" }, ko: { type: "string" } } } }
   }
 };
+const TALK_GUIDE = `세 가지 버전으로 알려 주세요.\n` +
+  `1) formal: 회사·거래처·관공서에 전화할 때 쓰는 약간 공적이고 정중한 말투\n` +
+  `2) polite: 우버 기사, 길에서 만난 모르는 사람, 상점 주인, 아파트 매니저에게 쓰는 친절하고 무난한 말투\n` +
+  `3) casual: 친구·가족에게 쓰는 편한 일상 말투\n` +
+  `각 버전의 note에는 한국어 1~2줄로 그 말투가 대체로 어떤 뉘앙스인지(얼마나 정중한지, 어떤 느낌으로 들리는지) 설명해 주세요.`;
 $("talkAsk").onclick = async () => {
   const q = $("talkQ").value.trim(); if (!q) return;
   const out = $("talkOut");
   if (!apiKey()) {
     out.innerHTML = `<p class="muted">설정 탭에서 Claude 키를 넣으면 여기서 바로 답해요. 지금은 Claude 앱에서 물어볼게요.</p>`;
-    window.open("https://claude.ai/new?q=" + encodeURIComponent("캐나다에서 일상적으로 쓰는 자연스러운 영어로 어떻게 말해요? 2~3가지로, 한국어로 짧게 뉘앙스도 알려 주세요.\n\n" + q), "_blank");
+    window.open("https://claude.ai/new?q=" + encodeURIComponent("캐나다에서 원어민이 실제로 하는 자연스러운 영어로 어떻게 말해요? " + TALK_GUIDE + "\n\n" + q), "_blank");
     return;
   }
   $("talkAsk").disabled = true; out.innerHTML = `<p class="muted">Claude가 생각하는 중…</p>`;
   try {
     const raw = await callClaude(`한국어 문장: ${q}\n\n` +
-      `이 말을 캐나다에서 원어민이 일상에서 실제로 하는 자연스러운 영어로 바꿔 주세요. 교과서 말투 말고 진짜 입으로 하는 말로요.\n` +
-      `JSON만 출력하세요. 다른 글자는 쓰지 마세요.\n` +
-      `{"options":[{"en":"영어 표현","note":"한국어로 1줄: 언제, 어떤 느낌으로 쓰는지"}],"words":[{"en":"핵심 단어나 덩어리","ko":"뜻"}]}\n` +
-      `options는 2~3개, 첫 번째가 가장 자연스러운 것. words는 기억해 둘 만한 핵심 표현 0~3개.`, TALK_SCHEMA);
+      `이 말을 캐나다에서 원어민이 실제로 입으로 하는 자연스러운 영어로 바꿔 주세요. 교과서 말투는 피해 주세요.\n` +
+      TALK_GUIDE + `\nwords에는 기억해 둘 만한 핵심 단어나 덩어리 표현 0~3개를 뜻과 함께 넣어 주세요.`, TALK_SCHEMA);
     const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
     out.textContent = "";
-    for (const o of j.options || []) {
+    const options = TALK_LEVELS.filter(l => j[l.key]?.en).map(l => ({ ...j[l.key], level: l.label, who: l.who }));
+    for (const o of options) {
       const card = document.createElement("div"); card.className = "item"; card.style.marginTop = "8px";
-      card.innerHTML = `<div class="w" style="grid-column:1/-1"></div><div class="m" style="grid-column:1/-1"></div><div class="acts"><button class="btn small">저장</button></div>`;
+      card.innerHTML = `<div class="label" style="grid-column:1/-1;margin:0"></div><div class="w" style="grid-column:1/-1"></div><div class="m" style="grid-column:1/-1"></div><div class="acts"><button class="btn small">저장</button></div>`;
+      card.querySelector(".label").textContent = `${o.level} · ${o.who}`;
       card.querySelector(".w").textContent = o.en; card.querySelector(".m").textContent = o.note || "";
       const b = card.querySelector("button");
       b.onclick = () => {
         state.daily = state.daily || [];
-        state.daily.unshift({ id: Date.now() + Math.random().toString(36).slice(2, 6), ko: q, en: o.en, note: o.note || "", words: j.words || [], d: Date.now() });
+        state.daily.unshift({ id: Date.now() + Math.random().toString(36).slice(2, 6), ko: q, en: o.en, note: o.note || "", level: o.level, words: j.words || [], d: Date.now() });
         save(); b.disabled = true; b.textContent = "저장됨"; renderTalk();
       };
       out.append(card);
@@ -1030,7 +1042,7 @@ function renderTalk(){
       if (!shown) { shown = true; w.textContent = t.en; w.style.color = ""; return; }
       e.hidden = acts.hidden = !e.hidden;
     };
-    e.textContent = [t.note, ...(t.words || []).map(x => `${x.en} = ${x.ko}`)].filter(Boolean).join("  ·  ");
+    e.textContent = [t.level, t.note, ...(t.words || []).map(x => `${x.en} = ${x.ko}`)].filter(Boolean).join("  ·  ");
     el.querySelector("button").onclick = () => { if (!confirm("이 표현을 지울까요?")) return; state.daily = state.daily.filter(x => x.id !== t.id); save(); renderTalk(); };
     list.append(el);
   }
