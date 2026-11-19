@@ -176,6 +176,21 @@ ol.steps{margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px}
 
   <!-- ===== 일상 영어 ===== -->
   <section id="view-talk" hidden style="display:grid;gap:12px">
+    <div class="chips" id="talkModes">
+      <button class="chipbtn" data-v="routine" aria-pressed="true">오늘 루틴</button>
+      <button class="chipbtn" data-v="ask" aria-pressed="false">이건 영어로?</button>
+    </div>
+    <div id="routineBox" style="display:grid;gap:12px">
+      <div class="panel" id="rPanel"></div>
+      <div class="panel" id="rReviewTalk" hidden></div>
+      <div class="panel" id="rSrs"></div>
+      <div class="panel">
+        <details><summary class="label">루틴 표현 <span id="rExprCount"></span></summary><div class="list" id="rExprList" style="margin-top:8px"></div></details>
+        <details><summary class="label">일기장 <span id="rDiaryCount"></span></summary><div class="list" id="rDiaryList" style="margin-top:8px"></div></details>
+        <details><summary class="label">실수 노트 <span id="rMistakeCount"></span></summary><div class="list" id="rMistakeList" style="margin-top:8px"></div></details>
+      </div>
+    </div>
+    <div id="askBox" hidden style="display:grid;gap:12px">
     <div class="panel">
       <div class="label">이건 영어로 뭐라고 해?</div>
       <p class="muted">일상에서 하고 싶은 말을 한국어로 적으면, 캐나다에서 실제로 쓰는 자연스러운 말로 알려 줘요. CELPIP 단어장과는 따로 저장돼요.</p>
@@ -190,6 +205,7 @@ ol.steps{margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px}
       </div>
       <input type="search" id="talkSearch" placeholder="한국어나 영어로 찾기" style="width:100%;margin-top:8px">
       <div class="list" id="talkList" style="margin-top:8px"></div>
+    </div>
     </div>
   </section>
 
@@ -354,7 +370,7 @@ document.querySelector("nav").onclick = e => {
   TABS.forEach(t => { $("view-" + t).hidden = t !== b.dataset.tab; });
   document.querySelectorAll("nav button").forEach(x => x.setAttribute("aria-selected", x === b));
   if (b.dataset.tab === "list") renderList();
-  if (b.dataset.tab === "talk") renderTalk();
+  if (b.dataset.tab === "talk") { renderTalk(); renderRoutine(); }
   scrollTo(0, 0);
 };
 
@@ -1047,6 +1063,216 @@ function renderTalk(){
     list.append(el);
   }
 }
+// ---------- daily routine: one expression → 5 examples → 3 sentences → correction → read aloud 3x ----------
+// kept apart from the CELPIP words: own expression list with its own spaced review, diary and mistake notes
+const RT = () => (state.routine = state.routine || { exprs: [], diary: [], mistakes: [], streak: { count: 0, last: "" }, lastReview: 0, today: null });
+const OBJ = props => ({ type: "object", additionalProperties: false, required: Object.keys(props), properties: props });
+const STR = { type: "string" };
+const SUGGEST_SCHEMA = OBJ({ items: { type: "array", items: OBJ({ en: STR, ko: STR }) } });
+const EXAMPLES_SCHEMA = OBJ({ ko: STR, examples: { type: "array", items: OBJ({ en: STR, ko: STR }) } });
+const FIX_SCHEMA = OBJ({ fixed: STR, why: STR, mistakes: { type: "array", items: OBJ({ wrong: STR, right: STR, why: STR }) } });
+const SCENE_SCHEMA = OBJ({ ko: STR, en: STR });
+const parseJ = raw => JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+const sentCount = t => t.split(/[.!?]+(?=\s|$)/).filter(x => x.trim()).length;
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+const btn = (text, cls, fn) => { const b = el("button", cls || "btn", text); b.onclick = fn; return b; };
+const FIX_PROMPT = text => `학생이 쓴 영어(한국어가 섞여 있을 수 있어요):\n${text}\n\n` +
+  `캐나다 원어민이 실제로 쓰는 자연스럽고 문법적으로 맞는 영어로 고쳐 주세요. 한국어 부분은 자연스러운 영어로 바꿔 주세요. 학생이 쓴 내용과 분량은 그대로 두세요.\n` +
+  `fixed: 고친 전체 문장. why: 왜 바뀌었는지 한국어로 짧게 1~3줄. mistakes: 실제로 틀린 부분만 한 줄씩(wrong: 틀린 부분, right: 고친 것, why: 한국어로 짧은 이유). 틀린 게 없으면 빈 배열.`;
+function addMistakes(list){
+  const r = RT();
+  for (const m of list || []) {
+    if (!m.wrong || !m.right) continue;
+    const k = m.wrong.trim().toLowerCase(), old = r.mistakes.find(x => x.wrong.trim().toLowerCase() === k);
+    if (old) { old.count = (old.count || 1) + 1; old.d = Date.now(); old.right = m.right; old.why = m.why; }
+    else r.mistakes.unshift({ wrong: m.wrong, right: m.right, why: m.why || "", count: 1, d: Date.now() });
+  }
+}
+chipGroup("talkModes", false, v => { $("routineBox").hidden = v !== "routine"; $("askBox").hidden = v !== "ask"; });
+function renderRoutine(){
+  const r = RT(), P = $("rPanel"); P.textContent = "";
+  if (r.today && r.today.date !== today() && !r.today.done) { /* keep an unfinished routine from an earlier day */ }
+  if (r.today?.done && r.today.date !== today()) r.today = null;
+  const t = r.today;
+  const head = el("div", "row"); head.style.cssText = "justify-content:space-between;align-items:center";
+  head.append(el("div", "label", "오늘 루틴" + (t && !t.done ? ` · ${t.step}/4단계` : "")), el("span", "muted", r.streak.count ? `연속 ${r.streak.count}일` : ""));
+  P.append(head);
+  if (!apiKey()) { P.append(el("p", "muted", "설정 탭에서 Claude 키를 넣으면 루틴을 시작할 수 있어요.")); renderRoutineLists(); return; }
+  if (!t) { stepPick(P); }
+  else if (t.done) {
+    P.append(el("p", null, "오늘 루틴 끝! 내일 또 만나요."), el("div", "mine", t.result.fixed));
+    P.append(btn("하나 더 하기", "btn ghost small", () => { r.today = null; save(); renderRoutine(); }));
+  }
+  else if (t.step === 2) stepExamples(P, t);
+  else if (t.step === 3) stepWrite(P, t);
+  else stepFix(P, t);
+  renderReviewTalk(); renderRoutineSrs(); renderRoutineLists();
+}
+let rLoading = false; // one Claude call at a time, even if the tab re-renders
+function busy(P, msg){ const m = el("p", "muted", msg); P.append(m); return m; }
+function fail(P, e){ P.append(el("p", "muted", e instanceof SyntaxError ? "답을 읽지 못했어요. 한 번 더 눌러 주세요." : e.message)); }
+// ① pick one expression: type it, or take one of three Claude suggestions
+function stepPick(P){
+  const r = RT();
+  P.append(el("p", "muted", "① 오늘 볼 표현을 딱 하나만 정해요. 드라마, TED, 일하다 들은 말 무엇이든 좋아요."));
+  const inp = el("input"); inp.type = "text"; inp.placeholder = "예: I feel like ~"; inp.style.width = "100%";
+  const ko = el("input"); ko.type = "text"; ko.placeholder = "뜻 (모르면 비워 두세요)"; ko.style.width = "100%";
+  const sug = el("div", "chips");
+  const go = btn("이 표현으로 시작", "btn wide", () => {
+    const en = inp.value.trim(); if (!en) { inp.focus(); return; }
+    r.today = { date: today(), step: 2, expr: en, ko: ko.value.trim(), examples: [], stars: [], mine: "", result: null, reads: 0 };
+    save(); renderRoutine();
+  });
+  const ask = btn("Claude 추천 3개", "btn ghost small", async () => {
+    ask.disabled = true; sug.textContent = ""; const m = busy(sug, "추천 고르는 중…");
+    const known = r.exprs.map(x => x.en).slice(0, 60).join(", ");
+    try {
+      const j = parseJ(await callClaude(`캐나다에서 일하거나(카페, 손님 응대, 동료와 대화) 일상에서 원어민이 아주 자주 쓰는 영어 표현 3개를 추천해 주세요. 단어 하나보다는 바로 입으로 쓸 수 있는 덩어리 표현으로요. ko에는 한국어 뜻을 짧게.` + (known ? `\n이미 배운 표현은 빼 주세요: ${known}` : ""), SUGGEST_SCHEMA));
+      m.remove();
+      for (const x of j.items || []) sug.append(btn(`${x.en} · ${x.ko}`, "chipbtn", () => { inp.value = x.en; ko.value = x.ko; }));
+    } catch (e) { m.remove(); fail(sug, e); }
+    ask.disabled = false;
+  });
+  P.append(inp, ko, ask, sug, go);
+}
+// ② five everyday examples; star the ones I'd actually use
+async function stepExamples(P, t){
+  P.append(el("div", "w", t.expr));
+  if (!t.examples.length) {
+    const m = busy(P, "② 예문 만드는 중…"); if (rLoading) return; rLoading = true;
+    try {
+      const j = parseJ(await callClaude(`I just learned the phrase "${t.expr}". Could you come up with 5 natural, everyday examples using this phrase? Please make them about work, cafe, or daily life in Canada.\nko: 이 표현의 한국어 뜻을 짧게. examples: en은 예문, ko는 한국어 해석.`, EXAMPLES_SCHEMA));
+      t.examples = (j.examples || []).slice(0, 5); if (!t.ko) t.ko = j.ko || ""; save();
+      m.remove(); P.textContent = ""; return renderRoutine();
+    } catch (e) { m.remove(); fail(P, e); P.append(btn("다시 시도", "btn ghost small", () => renderRoutine())); return; }
+    finally { rLoading = false; }
+  }
+  if (t.ko) P.append(el("p", "muted", "뜻: " + t.ko));
+  P.append(el("p", "muted", "② 외우지 말고 읽으면서 \"내가 쓸 만한 상황\"에 ☆를 눌러요."));
+  t.examples.forEach((x, i) => {
+    const it = el("div", "item"); it.style.cursor = "pointer";
+    const w = el("div", "w", (t.stars.includes(i) ? "★ " : "☆ ") + x.en); w.style.gridColumn = "1/-1";
+    const k = el("div", "m", x.ko); k.style.gridColumn = "1/-1";
+    it.append(w, k);
+    it.onclick = () => { t.stars = t.stars.includes(i) ? t.stars.filter(s => s !== i) : [...t.stars, i]; save(); renderRoutine(); };
+    P.append(it);
+  });
+  P.append(btn("다음: 3문장 쓰기", "btn wide", () => { t.step = 3; save(); renderRoutine(); }));
+}
+// ③ today in three sentences, English first; Korean is fine where stuck
+function stepWrite(P, t){
+  P.append(el("div", "w", t.expr), el("p", "muted", "③ 오늘 있었던 일을 이 표현을 넣어 3문장으로 써요. 영어로 먼저 써 보고, 막히면 한글을 섞어도 돼요."));
+  const ta = el("textarea"); ta.placeholder = "Today I felt like ..."; ta.value = t.mine || ""; ta.style.minHeight = "110px";
+  const note = el("p", "muted");
+  const upd = () => { const n = sentCount(ta.value); note.textContent = n > 3 ? `${n}문장이에요. 오늘은 3문장에서 멈추는 게 오래가요.` : `${n} / 3문장`; t.mine = ta.value; save(); };
+  ta.oninput = upd; upd();
+  P.append(ta, note, btn("④ 교정 받기", "btn wide", () => { if (!ta.value.trim()) return ta.focus(); t.step = 4; t.result = null; save(); renderRoutine(); }),
+    btn("← 예문 다시 보기", "btn ghost small", () => { t.step = 2; save(); renderRoutine(); }));
+}
+// ④ correction, then read the fixed version aloud three times
+async function stepFix(P, t){
+  P.append(el("div", "w", t.expr), el("p", "muted", "내가 쓴 문장"), el("div", null, t.mine));
+  if (!t.result) {
+    const m = busy(P, "④ Claude가 교정하는 중…"); if (rLoading) return; rLoading = true;
+    try { t.result = parseJ(await callClaude(FIX_PROMPT(t.mine), FIX_SCHEMA)); save(); m.remove(); P.textContent = ""; return renderRoutine(); }
+    catch (e) { m.remove(); fail(P, e); P.append(btn("다시 시도", "btn ghost small", () => renderRoutine()), btn("← 문장 고치기", "btn ghost small", () => { t.step = 3; save(); renderRoutine(); })); return; }
+    finally { rLoading = false; }
+  }
+  P.append(el("p", "label", "고친 문장"), el("div", "mine", t.result.fixed), el("p", "muted", t.result.why));
+  if (t.result.mistakes?.length) {
+    const ul = el("ul"); ul.style.cssText = "margin:0;padding-left:18px;font-size:14px";
+    for (const x of t.result.mistakes) ul.append(el("li", null, `${x.wrong} → ${x.right}  (${x.why})`));
+    P.append(ul);
+  }
+  P.append(el("p", "muted", "고친 문장을 소리 내어 3번 읽어요. 눈으로만 보면 거의 남지 않아요."));
+  const read = btn(`읽었어요 (${t.reads}/3)`, "btn wide", () => {
+    t.reads++; read.textContent = `읽었어요 (${t.reads}/3)`; save();
+    if (t.reads >= 3) finishRoutine(t);
+  });
+  P.append(read, btn("← 문장 다시 쓰기", "btn ghost small", () => { t.step = 3; t.result = null; t.reads = 0; save(); renderRoutine(); }));
+}
+function finishRoutine(t){
+  const r = RT();
+  const id = t.expr.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || String(Date.now());
+  const starred = t.stars.map(i => t.examples[i]).filter(Boolean);
+  const old = r.exprs.find(x => x.id === id);
+  if (old) Object.assign(old, { ko: t.ko || old.ko, examples: t.examples, starred });
+  else r.exprs.unshift({ id, en: t.expr, ko: t.ko, examples: t.examples, starred, box: 0, due: Date.now() + DAY, d: Date.now() });
+  r.diary.unshift({ d: Date.now(), expr: t.expr, mine: t.mine, fixed: t.result.fixed, why: t.result.why });
+  addMistakes(t.result.mistakes);
+  const d = today();
+  if (r.streak.last !== d) { const y = new Date(Date.now() - DAY); const yd = y.getFullYear() + "-" + (y.getMonth() + 1) + "-" + y.getDate(); r.streak = { count: r.streak.last === yd ? r.streak.count + 1 : 1, last: d }; }
+  t.done = true; save(); renderRoutine();
+}
+// spaced review of routine expressions only (same intervals as the CELPIP words, separate list)
+function renderRoutineSrs(){
+  const r = RT(), P = $("rSrs"); P.textContent = "";
+  const due = r.exprs.filter(x => (x.due || 0) <= Date.now());
+  P.append(el("div", "label", `루틴 표현 복습 · 오늘 ${due.length}개`));
+  if (!due.length) { P.append(el("p", "muted", r.exprs.length ? "오늘 복습할 표현이 없어요." : "루틴을 마치면 표현이 여기에서 1·3·7일 뒤에 다시 나와요.")); return; }
+  const x = due[0];
+  P.append(el("p", null, "뜻: " + (x.ko || "—")), el("p", "muted", "영어로 떠올려 보고 확인하세요."));
+  const ans = el("div"); ans.hidden = true;
+  ans.append(el("div", "w", x.en), ...(x.starred?.length ? x.starred : x.examples.slice(0, 1)).map(e => el("div", "muted", e.en)));
+  const row = el("div", "row");
+  const grade = ok => { x.box = ok ? Math.min((x.box || 0) + 1, INTERVALS.length - 1) : 0; x.due = Date.now() + Math.max(1, INTERVALS[x.box]) * DAY; save(); renderRoutineSrs(); renderRoutineLists(); };
+  const show = btn("확인", "btn wide", () => { ans.hidden = false; show.remove(); row.append(btn("알았어요", "btn", () => grade(true)), btn("몰랐어요", "btn ghost", () => grade(false))); });
+  row.append(show); P.append(ans, row);
+}
+// review talk 2–3 times a week: a scene mixing three past expressions, answered in English
+function renderReviewTalk(){
+  const r = RT(), P = $("rReviewTalk"); P.textContent = "";
+  const ready = r.exprs.length >= 3 && Date.now() - (r.lastReview || 0) > 2 * DAY;
+  if (!ready && !r.scene) { P.hidden = true; return; }
+  P.hidden = false;
+  P.append(el("div", "label", "복습 대화"));
+  if (!r.scene) {
+    P.append(el("p", "muted", "지난번 표현 3개를 섞은 상황에서 영어로 답해 봐요. 주 2~3번이면 충분해요."));
+    const go = btn("상황 만들기", "btn wide", async () => {
+      go.disabled = true; const m = busy(P, "상황 만드는 중…");
+      const pick = shuffle(r.exprs).slice(0, 3).map(x => x.en);
+      try {
+        const j = parseJ(await callClaude(`이 표현 3개를 섞어서 캐나다의 일하는 상황(카페 주문, 손님 응대, 동료와 대화)이나 일상 속 짧은 상황을 하나 만들어 주세요: ${pick.join(" / ")}\n` +
+          `en: 상대방이 나에게 건네는 영어 대사 1~2문장. ko: 상황 설명 한국어 1~2줄과, 내가 이 표현들을 써서 답해 보라는 안내.`, SCENE_SCHEMA));
+        r.scene = { ...j, exprs: pick }; save(); renderReviewTalk();
+      } catch (e) { m.remove(); fail(P, e); go.disabled = false; }
+    });
+    P.append(go); return;
+  }
+  const sc = r.scene;
+  P.append(el("p", null, sc.ko), el("div", "mine", sc.en), el("p", "muted", "써 볼 표현: " + sc.exprs.join(" · ")));
+  const ta = el("textarea"); ta.placeholder = "영어로 답해 보세요"; ta.style.minHeight = "80px";
+  const out = el("div");
+  const send = btn("교정 받기", "btn wide", async () => {
+    if (!ta.value.trim()) return ta.focus();
+    send.disabled = true; out.textContent = ""; const m = busy(out, "교정하는 중…");
+    try {
+      const j = parseJ(await callClaude(FIX_PROMPT(`(상황: ${sc.en})\n${ta.value}`), FIX_SCHEMA));
+      m.remove(); out.append(el("div", "mine", j.fixed), el("p", "muted", j.why));
+      addMistakes(j.mistakes); r.lastReview = Date.now(); r.scene = null; save();
+      out.append(btn("끝내기", "btn ghost small", () => renderRoutine()));
+      renderRoutineLists();
+    } catch (e) { m.remove(); fail(out, e); send.disabled = false; }
+  });
+  P.append(ta, send, out);
+}
+function renderRoutineLists(){
+  const r = RT();
+  $("rExprCount").textContent = `(${r.exprs.length})`; $("rDiaryCount").textContent = `(${r.diary.length})`; $("rMistakeCount").textContent = `(${r.mistakes.length})`;
+  const L = (id, rows, empty, make) => { const b = $(id); b.textContent = ""; if (!rows.length) b.append(el("p", "muted", empty)); for (const x of rows) b.append(make(x)); };
+  const fold = (top, body, onDel) => {
+    const it = el("div", "item"); it.style.cursor = "pointer";
+    const tp = el("div", "w", top); tp.style.gridColumn = "1/-1";
+    const bd = el("div", "e"); bd.style.cssText = "grid-column:1/-1;white-space:pre-wrap"; bd.hidden = true; bd.textContent = body;
+    const acts = el("div", "acts"); acts.hidden = true; acts.append(btn("지우기", "btn ghost small", e => { e.stopPropagation(); if (confirm("지울까요?")) onDel(); }));
+    it.append(tp, bd, acts); it.onclick = e => { if (e.target.closest("button")) return; bd.hidden = acts.hidden = !bd.hidden; };
+    return it;
+  };
+  const date = d => new Date(d).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" });
+  L("rExprList", r.exprs, "아직 없어요.", x => fold(`${x.en} · ${x.ko || ""}`, [...(x.starred?.length ? x.starred : x.examples)].map(e => `${e.en}\n  ${e.ko}`).join("\n"), () => { r.exprs = r.exprs.filter(y => y !== x); save(); renderRoutine(); }));
+  L("rDiaryList", r.diary, "루틴을 마치면 교정된 3문장이 여기에 날짜별로 모여요.", x => fold(`${date(x.d)} · ${x.fixed}`, `내가 쓴 문장: ${x.mine}\n표현: ${x.expr}\n${x.why}`, () => { r.diary = r.diary.filter(y => y !== x); save(); renderRoutine(); }));
+  L("rMistakeList", [...r.mistakes].sort((a, b) => (b.count || 1) - (a.count || 1) || b.d - a.d), "틀린 부분이 한 줄씩 쌓여요.", x => fold(`${x.wrong} → ${x.right}${x.count > 1 ? `  ×${x.count}` : ""}`, x.why, () => { r.mistakes = r.mistakes.filter(y => y !== x); save(); renderRoutine(); }));
+}
 $("apiKey").value = apiKey();
 $("keySave").onclick = async () => {
   const k = $("apiKey").value.trim();
@@ -1076,6 +1302,7 @@ $("importFile").onchange = async e => {
     let n = 0;
     for (const w of list) if (w && w.word) { const id = w.id || slug(w.word); state.words[id] = { ...state.words[id], ...w, id }; n++; }
     if (data.streak) state.streak = data.streak;
+    if (data.routine && !state.routine?.exprs?.length) state.routine = data.routine;
     if (Array.isArray(data.daily)) { const have = new Set((state.daily || []).map(t => t.id)); state.daily = [...(state.daily || []), ...data.daily.filter(t => !have.has(t.id))]; }
     if (Array.isArray(data.seedIds)) state.seedIds = [...new Set([...state.seedIds, ...data.seedIds])];
     save(); render();
