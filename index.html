@@ -203,6 +203,7 @@ ol.steps{margin:0;padding-left:20px;display:grid;gap:4px;font-size:14px}
         <div class="label" style="margin:0">저장한 일상 표현 <span id="talkCount"></span></div>
         <button class="btn ghost small" id="talkHide">영어 가리기</button>
       </div>
+      <button class="btn ghost small" id="talkPolishAll" style="margin-top:8px">저장한 표현 한꺼번에 자연스럽게 다듬기</button>
       <input type="search" id="talkSearch" placeholder="한국어나 영어로 찾기" style="width:100%;margin-top:8px">
       <div class="list" id="talkList" style="margin-top:8px"></div>
     </div>
@@ -986,12 +987,15 @@ const TALK_LEVELS = [
 ];
 const TALK_ITEM = { type: "object", additionalProperties: false, required: ["en", "note"], properties: { en: { type: "string" }, note: { type: "string" } } };
 const TALK_SCHEMA = {
-  type: "object", additionalProperties: false, required: ["formal", "polite", "casual", "words"],
+  type: "object", additionalProperties: false, required: ["formal", "polite", "casual", "words", "tip"],
   properties: {
-    formal: TALK_ITEM, polite: TALK_ITEM, casual: TALK_ITEM,
+    formal: TALK_ITEM, polite: TALK_ITEM, casual: TALK_ITEM, tip: { type: "string" },
     words: { type: "array", items: { type: "object", additionalProperties: false, required: ["en", "ko"], properties: { en: { type: "string" }, ko: { type: "string" } } } }
   }
 };
+// Chiwan found answers too close to word-for-word translations of the Korean
+const NATIVE_RULE = `한국어를 단어 하나하나 직역하지 마세요. 먼저 이 상황에서 이 말로 전하려는 의도를 파악하고, 원어민이 그 상황에서 실제로 하는 말로 바꿔 주세요. 직역하면 어색한 부분은 문장 구조를 과감히 바꾸세요.\n` +
+  `예: "이 봉투는 밑에 잡고 가셔야돼요. 안 그러면 찢어질 수 있어요" → "Make sure you hold it from the bottom, or it might rip." (This bag must be held from the bottom… 같은 직역 ✗)\n`;
 const TALK_GUIDE = `세 가지 버전으로 알려 주세요.\n` +
   `1) formal: 회사·거래처·관공서에 전화할 때 쓰는 약간 공적이고 정중한 말투\n` +
   `2) polite: 우버 기사, 길에서 만난 모르는 사람, 상점 주인, 아파트 매니저에게 쓰는 친절하고 무난한 말투\n` +
@@ -1002,16 +1006,18 @@ $("talkAsk").onclick = async () => {
   const out = $("talkOut");
   if (!apiKey()) {
     out.innerHTML = `<p class="muted">설정 탭에서 Claude 키를 넣으면 여기서 바로 답해요. 지금은 Claude 앱에서 물어볼게요.</p>`;
-    window.open("https://claude.ai/new?q=" + encodeURIComponent("캐나다에서 원어민이 실제로 하는 자연스러운 영어로 어떻게 말해요? " + TALK_GUIDE + "\n\n" + q), "_blank");
+    window.open("https://claude.ai/new?q=" + encodeURIComponent("캐나다에서 원어민이 실제로 하는 자연스러운 영어로 어떻게 말해요? " + NATIVE_RULE + TALK_GUIDE + "\n직역하면 왜 어색한지도 짧게 알려 주세요." + "\n\n" + q), "_blank");
     return;
   }
   $("talkAsk").disabled = true; out.innerHTML = `<p class="muted">Claude가 생각하는 중…</p>`;
   try {
     const raw = await callClaude(`한국어 문장: ${q}\n\n` +
       `이 말을 캐나다에서 원어민이 실제로 입으로 하는 자연스러운 영어로 바꿔 주세요. 교과서 말투는 피해 주세요.\n` +
-      TALK_GUIDE + `\nwords에는 기억해 둘 만한 핵심 단어나 덩어리 표현 0~3개를 뜻과 함께 넣어 주세요.`, TALK_SCHEMA);
+      NATIVE_RULE + TALK_GUIDE + `\nwords에는 기억해 둘 만한 핵심 단어나 덩어리 표현 0~3개를 뜻과 함께 넣어 주세요.\n` +
+      `tip에는 한국어 1~3줄로: 직역하면 왜 어색한지, 원어민이 이 상황에서 어떤 단어를 더 자주 고르는지(예: 봉투가 찢어질 땐 tear보다 rip).`, TALK_SCHEMA);
     const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
     out.textContent = "";
+    if (j.tip) { const tp = document.createElement("p"); tp.className = "notice"; tp.textContent = "💡 " + j.tip; out.append(tp); }
     const options = TALK_LEVELS.filter(l => j[l.key]?.en).map(l => ({ ...j[l.key], level: l.label, who: l.who }));
     for (const o of options) {
       const card = document.createElement("div"); card.className = "item"; card.style.marginTop = "8px";
@@ -1021,7 +1027,7 @@ $("talkAsk").onclick = async () => {
       const b = card.querySelector("button");
       b.onclick = () => {
         state.daily = state.daily || [];
-        state.daily.unshift({ id: Date.now() + Math.random().toString(36).slice(2, 6), ko: q, en: o.en, note: o.note || "", level: o.level, words: j.words || [], d: Date.now() });
+        state.daily.unshift({ id: Date.now() + Math.random().toString(36).slice(2, 6), ko: q, en: o.en, note: o.note || "", level: o.level, tip: j.tip || "", words: j.words || [], d: Date.now() });
         save(); b.disabled = true; b.textContent = "저장됨"; renderTalk();
       };
       out.append(card);
@@ -1036,6 +1042,28 @@ $("talkAsk").onclick = async () => {
     p.textContent = e instanceof SyntaxError ? "답을 읽지 못했어요. 한 번 더 눌러 주세요." : e.message; out.append(p);
   } finally { $("talkAsk").disabled = false; }
 };
+// re-polish an item saved before the no-literal-translation rule: keep the Korean and the register
+async function redoTalk(t, b){
+  if (!apiKey()) { b.textContent = "설정에서 Claude 키를 넣어 주세요"; return; }
+  b.disabled = true; b.textContent = "다듬는 중…";
+  try {
+    const raw = await callClaude(`한국어 문장: ${t.ko}\n지금 저장된 영어: ${t.en}\n말투: ${t.level || "일상"}\n\n` + NATIVE_RULE +
+      `저장된 영어가 직역 같거나 어색하면 원어민이 이 상황, 이 말투로 실제로 하는 말로 바꿔 주세요. 이미 자연스러우면 그대로 두세요.\n` +
+      `en: 최종 영어. note: 이 말투의 뉘앙스 한국어 1줄. tip: 무엇을 왜 바꿨는지(직역과 다른 점, 단어 선택) 한국어 1~2줄. 그대로 뒀으면 "이미 자연스러워요"와 짧은 이유.`,
+      { type: "object", additionalProperties: false, required: ["en", "note", "tip"], properties: { en: { type: "string" }, note: { type: "string" }, tip: { type: "string" } } });
+    const j = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1));
+    if (j.en && j.en.trim() !== t.en.trim()) t.prev = t.en;
+    Object.assign(t, { en: j.en || t.en, note: j.note || t.note, tip: j.tip || t.tip, polished: true });
+    save(); renderTalk();
+  } catch (e) { b.disabled = false; b.textContent = e instanceof SyntaxError ? "다시 눌러 주세요" : e.message; }
+}
+$("talkPolishAll").onclick = async () => {
+  const b = $("talkPolishAll"), todo = (state.daily || []).filter(t => !t.polished);
+  if (!todo.length) { b.textContent = "이미 다 다듬었어요"; return; }
+  b.disabled = true;
+  for (let i = 0; i < todo.length; i++) { b.textContent = `다듬는 중… ${i + 1}/${todo.length}`; await redoTalk(todo[i], document.createElement("button")); }
+  b.disabled = false; b.textContent = "다 다듬었어요. 바뀐 건 펼치면 ‘이전’이 보여요";
+};
 $("talkHide").onclick = () => { talkHide = !talkHide; $("talkHide").textContent = talkHide ? "영어 보이기" : "영어 가리기"; renderTalk(); };
 $("talkSearch").oninput = () => renderTalk();
 function renderTalk(){
@@ -1046,7 +1074,7 @@ function renderTalk(){
   if (!rows.length) { list.innerHTML = `<p class="muted">${saved.length ? "찾는 표현이 없어요." : "마음에 드는 표현을 ‘저장’하면 여기에 모여요."}</p>`; return; }
   for (const t of rows) {
     const el = document.createElement("div"); el.className = "item";
-    el.innerHTML = `<div class="m" style="grid-column:1/-1;color:var(--ink)"></div><div class="w" style="grid-column:1/-1"></div><div class="e" hidden style="grid-column:1/-1"></div><div class="acts" hidden><button class="btn ghost small">지우기</button></div>`;
+    el.innerHTML = `<div class="m" style="grid-column:1/-1;color:var(--ink)"></div><div class="w" style="grid-column:1/-1"></div><div class="e" hidden style="grid-column:1/-1"></div><div class="acts" hidden><button class="btn ghost small" data-a="redo">자연스럽게 다시 다듬기</button><button class="btn ghost small" data-a="del">지우기</button></div>`;
     el.style.cursor = "pointer";
     el.querySelector(".m").textContent = t.ko;
     const w = el.querySelector(".w"), e = el.querySelector(".e"), acts = el.querySelector(".acts");
@@ -1058,8 +1086,9 @@ function renderTalk(){
       if (!shown) { shown = true; w.textContent = t.en; w.style.color = ""; return; }
       e.hidden = acts.hidden = !e.hidden;
     };
-    e.textContent = [t.level, t.note, ...(t.words || []).map(x => `${x.en} = ${x.ko}`)].filter(Boolean).join("  ·  ");
-    el.querySelector("button").onclick = () => { if (!confirm("이 표현을 지울까요?")) return; state.daily = state.daily.filter(x => x.id !== t.id); save(); renderTalk(); };
+    e.textContent = [t.level, t.note, t.tip && "💡 " + t.tip, t.prev && "이전: " + t.prev, ...(t.words || []).map(x => `${x.en} = ${x.ko}`)].filter(Boolean).join("  ·  ");
+    el.querySelector("[data-a=redo]").onclick = ev => redoTalk(t, ev.target);
+    el.querySelector("[data-a=del]").onclick = () => { if (!confirm("이 표현을 지울까요?")) return; state.daily = state.daily.filter(x => x.id !== t.id); save(); renderTalk(); };
     list.append(el);
   }
 }
@@ -1077,7 +1106,8 @@ const sentCount = t => t.split(/[.!?]+(?=\s|$)/).filter(x => x.trim()).length;
 const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
 const btn = (text, cls, fn) => { const b = el("button", cls || "btn", text); b.onclick = fn; return b; };
 const FIX_PROMPT = text => `학생이 쓴 영어(한국어가 섞여 있을 수 있어요):\n${text}\n\n` +
-  `캐나다 원어민이 실제로 쓰는 자연스럽고 문법적으로 맞는 영어로 고쳐 주세요. 한국어 부분은 자연스러운 영어로 바꿔 주세요. 학생이 쓴 내용과 분량은 그대로 두세요.\n` +
+  `캐나다 원어민이 실제로 쓰는 자연스럽고 문법적으로 맞는 영어로 고쳐 주세요. 한국어 부분은 직역하지 말고 원어민이 그 상황에서 실제로 하는 말로 바꿔 주세요. 학생이 쓴 내용과 분량은 그대로 두세요.\n` +
+  `문법은 맞아도 한국어를 직역한 것처럼 어색한 부분은 원어민 표현으로 고치고, mistakes에 넣되 why를 "직역 느낌: ..."으로 시작해 주세요.\n` +
   `fixed: 고친 전체 문장. why: 왜 바뀌었는지 한국어로 짧게 1~3줄. mistakes: 실제로 틀린 부분만 한 줄씩(wrong: 틀린 부분, right: 고친 것, why: 한국어로 짧은 이유). 틀린 게 없으면 빈 배열.`;
 function addMistakes(list){
   const r = RT();
